@@ -1,0 +1,8 @@
+[Desktop Entry]
+_Name=Vpngate Gtk
+_Comment=VpngateGtk application
+Categories=GNOME;Utility;
+Exec=vpngate-gtk
+Icon=vpngate-gtk
+Terminal=false
+Type=Application

@@ -1,0 +1,9 @@
+<glade-catalog name="about_vpngate_gtk_dialog" domain="glade-3" 
+               depends="gtk+" version="1.0">
+  <glade-widget-classes>
+    <glade-widget-class title="About Vpngate Gtk Dialog" name="AboutVpngateGtkDialog" 
+                        generic-name="AboutVpngateGtkDialog" parent="GtkAboutDialog"
+                        icon-name="widget-gtk-about-dialog"/>
+  </glade-widget-classes>
+
+</glade-catalog>
