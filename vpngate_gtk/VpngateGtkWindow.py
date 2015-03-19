@@ -36,8 +36,7 @@ COL_SPEED_TEXT = 9
 COL_PING_TEXT = 10
 COL_OPENVPN_DATA = 11
 
-# URL_VPNGATE_LIST = "http://www.vpngate.net/api/iphone/"
-URL_VPNGATE_LIST = "file:///home/josep/Downloads/vpngate.txt"
+URL_VPNGATE_LIST = "http://www.vpngate.net/api/iphone/"
 
 
 def skip_last_n(iterator, n=1):
@@ -156,22 +155,6 @@ def get_vpngate_list(callback):
 
     except urllib.error.URLError:
         print("Couldn't get the VPN servers list.")
-
-
-
-# def getNextAvailablePort(self):
-#     """Returns next minimal unused port starting from 10598."""
-#     minport = 10598
-#     found = False
-#     while not found:
-#         found = True
-#         for c in self.connections.itervalues():
-#             if c.port != 0:
-#                 if c.port == minport:
-#                     found = False
-#                     minport += 1
-#                     break
-#     return minport
 
 
 # See vpngate_gtk_lib.Window.py for more details about how this class works
