@@ -1,30 +1,27 @@
 # -*- Mode: Python; coding: utf-8; indent-tabs-mode: nil; tab-width: 4 -*-
-### BEGIN LICENSE
-# This file is in the public domain
-### END LICENSE
 
-from locale import gettext as _
-
-from gi.repository import Gtk, GObject # pylint: disable=E0611
-import logging
-logger = logging.getLogger('vpngate_gtk')
-
-from vpngate_gtk_lib import Window
-from vpngate_gtk.AboutVpngateGtkDialog import AboutVpngateGtkDialog
-from vpngate_gtk.PreferencesVpngateGtkDialog import PreferencesVpngateGtkDialog
-
-import threading
-import urllib.request, urllib.error
-import csv
 import codecs
+import csv
 import math
-import tempfile
-import subprocess
 import sys
 import threading
 import time
-
+import urllib.error
+import urllib.request
 from base64 import b64decode
+from collections import deque
+from itertools import islice
+from locale import gettext as _
+
+from gi.repository import GObject, Gtk
+
+from vpngate_gtk.AboutVpngateGtkDialog import AboutVpngateGtkDialog
+from vpngate_gtk.PreferencesVpngateGtkDialog import PreferencesVpngateGtkDialog
+from vpngate_gtk_lib import Window
+
+import ovpnclient
+
+# logger = logging.getLogger('vpngate_gtk')
 
 COL_HOSTNAME = 0
 COL_IP = 1
@@ -39,16 +36,17 @@ COL_SPEED_TEXT = 9
 COL_PING_TEXT = 10
 COL_OPENVPN_DATA = 11
 
-URL_VPNGATE_LIST = "http://www.vpngate.net/api/iphone/"
+# URL_VPNGATE_LIST = "http://www.vpngate.net/api/iphone/"
+URL_VPNGATE_LIST = "file:///home/josep/Downloads/vpngate.txt"
 
-from collections import deque
-from itertools import islice
+
 def skip_last_n(iterator, n=1):
     it = iter(iterator)
     prev = deque(islice(it, n), n)
     for item in it:
         yield prev.popleft()
         prev.append(item)
+
 
 def miliseconds_to_human(num):
     x = num / 1000
@@ -71,6 +69,7 @@ def miliseconds_to_human(num):
 
     return ret
 
+
 class StoppableThread(threading.Thread):
     """Thread class with a stop() method. The thread itself has to check
     regularly for the stopped() condition."""
@@ -85,6 +84,7 @@ class StoppableThread(threading.Thread):
     def stopped(self):
         return self.__stop
 
+
 def get_vpngate_list(callback):
     thread = threading.currentThread()
     list = []
@@ -98,7 +98,7 @@ def get_vpngate_list(callback):
 
         reader = codecs.getreader("utf-8")(response)
         reader.readline()
-        csvlist = csv.DictReader(skip_last_n(reader,1))
+        csvlist = csv.DictReader(skip_last_n(reader, 1))
         for row in csvlist:
             # stop if we've been told to do so
             if thread.stopped():
@@ -149,22 +149,37 @@ def get_vpngate_list(callback):
         response.close()
 
         # stop if we've been told to do so
-        if thread.stopped(): return
+        if thread.stopped():
+            return
 
         GObject.idle_add(callback, list)
 
     except urllib.error.URLError:
         print("Couldn't get the VPN servers list.")
 
-def get_openvpn_data(treeview, treepath):
-    model = treeview.get_model()
-    return b64decode(model[treepath][COL_OPENVPN_DATA])
+
+
+# def getNextAvailablePort(self):
+#     """Returns next minimal unused port starting from 10598."""
+#     minport = 10598
+#     found = False
+#     while not found:
+#         found = True
+#         for c in self.connections.itervalues():
+#             if c.port != 0:
+#                 if c.port == minport:
+#                     found = False
+#                     minport += 1
+#                     break
+#     return minport
+
 
 # See vpngate_gtk_lib.Window.py for more details about how this class works
 class VpngateGtkWindow(Window):
     __gtype_name__ = "VpngateGtkWindow"
 
-    def finish_initializing(self, builder): # pylint: disable=E1002
+
+    def finish_initializing(self, builder):
         """Set up the main window"""
         super(VpngateGtkWindow, self).finish_initializing(builder)
 
@@ -175,7 +190,6 @@ class VpngateGtkWindow(Window):
         self.AboutDialog = AboutVpngateGtkDialog
         self.PreferencesDialog = PreferencesVpngateGtkDialog
 
-        self.vpntreeview = self.builder.get_object("vpntreeview")
         self.updatelistbutton = self.builder.get_object("updatelistbutton")
         self.connectbutton = self.builder.get_object("connectbutton")
         self.disconnectbutton = self.builder.get_object("disconnectbutton")
@@ -183,11 +197,20 @@ class VpngateGtkWindow(Window):
         self.statusbarcontext = self.statusbar.get_context_id("status bar")
         self.updatelistdialog = self.builder.get_object("updatelistdialog")
 
+        self.vpntreeview = self.builder.get_object("vpntreeview")
+        self.vpnliststore = self.vpntreeview.get_model()
+
         self.on_updatelistbutton_clicked(self.updatelistbutton)
+
+        self.disconnectbutton.set_sensitive(True)
+
+        self.connection = ovpnclient.Connection(closecb=self.openvpn_disconnect_callback)
+
 
     def set_statusbar(self, text):
         self.statusbar.remove_all(self.statusbarcontext)
         self.statusbar.push(self.statusbarcontext, text)
+
 
     def on_updatelistbutton_clicked(self, widget):
         widget.set_sensitive(False)
@@ -196,8 +219,13 @@ class VpngateGtkWindow(Window):
 
         self.set_statusbar(_("Loading VPN servers list..."))
 
-        self.updatelistthread = StoppableThread(target=get_vpngate_list, args=(self.populate_vpngate_list,), daemon=True)
+        self.updatelistthread = StoppableThread(
+            target=get_vpngate_list,
+            args=(self.populate_vpngate_list,),
+            daemon=True
+        )
         self.updatelistthread.start()
+
 
     def on_cancelupdatelistbutton_clicked(self, widget):
         if self.updatelistthread.is_alive():
@@ -206,26 +234,57 @@ class VpngateGtkWindow(Window):
         self.set_statusbar(_("Loading VPN servers list cancelled"))
         self.updatelistdialog.hide()
 
+
     def populate_vpngate_list(self, list):
         vpnliststore = self.vpntreeview.get_model()
         vpnliststore.clear()
         [vpnliststore.append(row) for row in list]
         self.updatelistbutton.set_sensitive(True)
         self.updatelistdialog.hide()
-        self.set_statusbar(_("VPN servers list updated on ") + time.strftime("%a, %d %b %Y %H:%M:%S", time.gmtime()))
+        self.set_statusbar(
+            _("VPN servers list updated on ") +
+            time.strftime("%a, %d %b %Y %H:%M:%S", time.gmtime())
+        )
+
 
     def on_connectbutton_clicked(self, widget):
         selection = self.vpntreeview.get_selection()
         model, treeiter = selection.get_selected()
-        print("You selected",model[treeiter][0])
+        if (treeiter is not None):
+            self.openvpn_connect(model[treeiter][COL_OPENVPN_DATA])
+
 
     def on_disconnectbutton_clicked(self, widget):
-        print("disconnect")
+        if self.connection is not None:
+            self.connection.close()
+
 
     def on_vpntreeviewselection_changed(self, selection):
         model, treeiter = selection.get_selected()
-        self.connectbutton.set_sensitive(treeiter != None)
-        #print("You selected", model[treeiter][0])
+        self.connectbutton.set_sensitive(treeiter is not None)
+
 
     def on_vpntreeview_row_activated(self, treeview, treepath, treeviewcolumn):
-        openvpn_data = get_openvpn_data(treeview, treepath)
+        model = treeview.get_model()
+        self.openvpn_connect(model[treepath][COL_OPENVPN_DATA])
+
+
+    def openvpn_connect_callback(self):
+        GObject.idle_add(self.on_openvpn_connected)
+
+
+    def on_openvpn_connected(self):
+        print('on_openvpn_connected')
+
+
+    def openvpn_disconnect_callback(self):
+        GObject.idle_add(self.on_openvpn_disconnected)
+
+
+    def on_openvpn_disconnected(self):
+        print('on_openvpn_disconnected')
+
+
+    def openvpn_connect(self, config):
+        self.connection.set_config(b64decode(config))
+        self.connection.open()
