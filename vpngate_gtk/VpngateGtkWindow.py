@@ -2,6 +2,7 @@
 
 import codecs
 import csv
+import gzip
 import math
 import sys
 import threading
@@ -10,16 +11,16 @@ import urllib.error
 import urllib.request
 from base64 import b64decode
 from collections import deque
+from io import BytesIO
 from itertools import islice
 from locale import gettext as _
 
 from gi.repository import GObject, Gtk
 
+import ovpnclient
 from vpngate_gtk.AboutVpngateGtkDialog import AboutVpngateGtkDialog
 from vpngate_gtk.PreferencesVpngateGtkDialog import PreferencesVpngateGtkDialog
 from vpngate_gtk_lib import Window
-
-import ovpnclient
 
 # logger = logging.getLogger('vpngate_gtk')
 
@@ -37,7 +38,6 @@ COL_PING_TEXT = 10
 COL_OPENVPN_DATA = 11
 
 URL_VPNGATE_LIST = "http://www.vpngate.net/api/iphone/"
-
 
 def skip_last_n(iterator, n=1):
     it = iter(iterator)
@@ -88,14 +88,21 @@ def get_vpngate_list(callback):
     thread = threading.currentThread()
     list = []
     try:
-        response = urllib.request.urlopen(URL_VPNGATE_LIST)
+        request = urllib.request.Request(URL_VPNGATE_LIST)
+        request.add_header('Accept-encoding', 'gzip')
+        response = urllib.request.urlopen(request)
 
         # stop if we've been told to do so
         if thread.stopped():
             response.close()
             return
 
-        reader = codecs.getreader("utf-8")(response)
+        if response.info().get('Content-Encoding') == 'gzip':
+            buf = BytesIO(response.read())
+            reader = codecs.getreader("utf-8")(gzip.GzipFile(fileobj=buf))
+        else:
+            reader = codecs.getreader("utf-8")(response)
+
         reader.readline()
         csvlist = csv.DictReader(skip_last_n(reader, 1))
         for row in csvlist:
@@ -166,9 +173,9 @@ class VpngateGtkWindow(Window):
         """Set up the main window"""
         super(VpngateGtkWindow, self).finish_initializing(builder)
 
-        self.toolbar = self.builder.get_object("toolbar")
-        context = self.toolbar.get_style_context()
-        context.add_class(Gtk.STYLE_CLASS_PRIMARY_TOOLBAR)
+        # self.toolbar = self.builder.get_object("toolbar")
+        # context = self.toolbar.get_style_context()
+        # context.add_class(Gtk.STYLE_CLASS_PRIMARY_TOOLBAR)
 
         self.AboutDialog = AboutVpngateGtkDialog
         self.PreferencesDialog = PreferencesVpngateGtkDialog
@@ -185,9 +192,12 @@ class VpngateGtkWindow(Window):
 
         self.on_updatelistbutton_clicked(self.updatelistbutton)
 
-        self.disconnectbutton.set_sensitive(True)
+        self.connectbutton.set_sensitive(False)
+        self.disconnectbutton.set_sensitive(False)
 
-        self.connection = ovpnclient.Connection(closecb=self.openvpn_disconnect_callback)
+        self.connection = ovpnclient.Connection(
+            onstatechange=self.openvpn_statechange_callback,
+        )
 
 
     def set_statusbar(self, text):
@@ -252,6 +262,11 @@ class VpngateGtkWindow(Window):
         self.openvpn_connect(model[treepath][COL_OPENVPN_DATA])
 
 
+    def openvpn_connect(self, config):
+        self.connection.set_config(b64decode(config))
+        self.connection.open()
+
+
     def openvpn_connect_callback(self):
         GObject.idle_add(self.on_openvpn_connected)
 
@@ -260,14 +275,27 @@ class VpngateGtkWindow(Window):
         print('on_openvpn_connected')
 
 
-    def openvpn_disconnect_callback(self):
-        GObject.idle_add(self.on_openvpn_disconnected)
+    def openvpn_statechange_callback(self, state, str_state):
+        GObject.idle_add(self.on_openvpn_statechange, state, str_state)
 
 
-    def on_openvpn_disconnected(self):
-        print('on_openvpn_disconnected')
+    def on_openvpn_statechange(self, state, str_state):
+        labelvpnstate = self.builder.get_object("labelvpnstate")
+        labelvpnipaddr = self.builder.get_object("labelvpnipaddr")
+        labelvpnconnsince = self.builder.get_object("labelvpnconnsince")
 
+        labelvpnstate.set_text(str_state)
 
-    def openvpn_connect(self, config):
-        self.connection.set_config(b64decode(config))
-        self.connection.open()
+        if state == self.connection.STATE_GOTIPADDR:
+            labelvpnipaddr.set_text(self.connection.get_vpnipaddr())
+        elif state == self.connection.STATE_CONNECTED:
+            labelvpnconnsince.set_text(time.strftime("%a, %d %b %Y %H:%M:%S", time.gmtime()))
+        else:
+            labelvpnipaddr.set_text('-')
+            labelvpnconnsince.set_text('-')
+            if state == self.connection.STATE_CONNECTING:
+                self.connectbutton.set_sensitive(False)
+                self.disconnectbutton.set_sensitive(True)
+            elif state == self.connection.STATE_DISCONNECTED:
+                self.connectbutton.set_sensitive(True)
+                self.disconnectbutton.set_sensitive(False)

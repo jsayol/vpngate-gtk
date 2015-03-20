@@ -5,14 +5,14 @@ import sys
 
 
 class AsyncManagerHandler(asynchat.async_chat):
-    def __init__(self, connection, addr, port, opencb=None, closecb=None, state_parser=None):
+    def __init__(self, connection, addr, port, onopen=None, onclose=None, stateparser=None):
         super(AsyncManagerHandler, self).__init__()
         self.connection = connection
         self.port = port
         self.buffer = []
-        self.openCallback = opencb
-        self.closeCallback = closecb
-        self.state_parser = state_parser
+        self.onopen = onopen
+        self.onclose = onclose
+        self.stateparser = stateparser
 
         print('AsyncManagerHandler connecting to '+addr+':'+str(port)+' ...')
         self.set_terminator(b'\n')
@@ -20,12 +20,12 @@ class AsyncManagerHandler(asynchat.async_chat):
         self.connect((addr, port))
 
 
-    def set_open_callback(self, callback):
-        self.openCallback = callback
+    def set_open_callback(self, fn):
+        self.onopen = fn
 
 
-    def set_close_callback(self, callback):
-        self.closeCallback = callback
+    def set_close_callback(self, fn):
+        self.onclose = fn
 
 
     def handle_error(self):
@@ -38,14 +38,14 @@ class AsyncManagerHandler(asynchat.async_chat):
 
     def handle_connect(self):
         super(AsyncManagerHandler, self).handle_connect()
-        if hasattr(self.openCallback, "__call__"):
-            self.openCallback()
+        if hasattr(self.onopen, "__call__"):
+            self.onopen()
 
 
     def handle_close(self):
         super(AsyncManagerHandler, self).handle_close()
-        if hasattr(self.closeCallback, "__call__"):
-            self.closeCallback()
+        if hasattr(self.onclose, "__call__"):
+            self.onclose()
 
 
     def collect_incoming_data(self, data):
@@ -65,8 +65,8 @@ class AsyncManagerHandler(asynchat.async_chat):
         elif msg.startswith('>LOG:'):
             pass
         elif msg.startswith('>STATE:'):
-            if hasattr(self.state_parser, "__call__"):
-                self.state_parser(msg[7:])
+            if hasattr(self.stateparser, "__call__"):
+                self.stateparser(msg[7:])
 
         self.buffer = []
 
