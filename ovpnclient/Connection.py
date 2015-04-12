@@ -18,8 +18,9 @@ class Connection(object):
         STATE_GOTIPADDR,
         STATE_CONNECTED,
         STATE_DISCONNECTING,
+	STATE_RECONNECTING,
         STATE_FAILED,
-    ) = range(8)
+    ) = range(9)
 
     STR_STATES = {
         STATE_DISCONNECTED      : 'Disconnected',
@@ -29,6 +30,7 @@ class Connection(object):
         STATE_GOTIPADDR         : 'Got network parameters',
         STATE_CONNECTED         : 'Connected',
         STATE_DISCONNECTING     : 'Disconnecting',
+	STATE_RECONNECTING	: 'Reconnecting',
         STATE_FAILED            : 'Error',
     }
 
@@ -177,6 +179,7 @@ class Connection(object):
         # 1426785749,ASSIGN_IP,,10.211.1.13,
         # 1426785750,CONNECTED,SUCCESS,10.211.1.13,1.249.243.61
         # 1426785794,EXITING,SIGTERM,,
+	####### 1426962784,RECONNECTING,tls-error,,
         state_info = line.split(',')
         state = state_info[1]
 
@@ -196,6 +199,8 @@ class Connection(object):
             self.set_state(self.STATE_CONNECTED)
         elif state == 'EXITING':
             self.set_state(self.STATE_DISCONNECTING)
+        elif state == 'RECONNECTING':
+            self.set_state(self.STATE_RECONNECTING)
         else:
             print('Unknown state:',line)
             self.set_state(self.STATE_FAILED)

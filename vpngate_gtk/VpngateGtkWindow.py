@@ -7,7 +7,6 @@ import math
 import sys
 import threading
 import time
-import urllib.error
 import urllib.request
 from base64 import b64decode
 from collections import deque
@@ -18,6 +17,7 @@ from locale import gettext as _
 from gi.repository import GObject, Gtk
 
 import ovpnclient
+
 from vpngate_gtk.AboutVpngateGtkDialog import AboutVpngateGtkDialog
 from vpngate_gtk.PreferencesVpngateGtkDialog import PreferencesVpngateGtkDialog
 from vpngate_gtk_lib import Window
@@ -37,7 +37,8 @@ COL_SPEED_TEXT = 9
 COL_PING_TEXT = 10
 COL_OPENVPN_DATA = 11
 
-URL_VPNGATE_LIST = "http://www.vpngate.net/api/iphone/"
+#URL_VPNGATE_LIST = "http://www.vpngate.net/api/iphone/"
+URL_VPNGATE_LIST = "file:///home/josep/Downloads/other/vpngate.txt"
 
 def skip_last_n(iterator, n=1):
     it = iter(iterator)
@@ -47,8 +48,8 @@ def skip_last_n(iterator, n=1):
         prev.append(item)
 
 
-def miliseconds_to_human(num):
-    x = num / 1000
+def seconds_to_human(x):
+    # x = num / 1000
     seconds = math.floor(x % 60)
     x /= 60
     minutes = math.floor(x % 60)
@@ -86,7 +87,7 @@ class StoppableThread(threading.Thread):
 
 def get_vpngate_list(callback):
     thread = threading.currentThread()
-    list = []
+    vpnlist = []
     try:
         request = urllib.request.Request(URL_VPNGATE_LIST)
         request.add_header('Accept-encoding', 'gzip')
@@ -112,8 +113,8 @@ def get_vpngate_list(callback):
                 return
 
             try:
-                uptime = int(row['Uptime'])
-                uptime_text = miliseconds_to_human(uptime)
+                uptime = math.floor(int(row['Uptime']) / 1000)
+                uptime_text = seconds_to_human(uptime)
             except ValueError:
                 uptime = None
                 uptime_text = 'n/a'
@@ -136,7 +137,7 @@ def get_vpngate_list(callback):
                 ping = None
                 ping_text = 'n/a'
 
-            list.append([
+            vpnlist.append([
                 row['#HostName'] + '.opengw.net',
                 row['IP'],
                 row['CountryLong'],
@@ -158,10 +159,12 @@ def get_vpngate_list(callback):
         if thread.stopped():
             return
 
-        GObject.idle_add(callback, list)
+        GObject.idle_add(callback, vpnlist)
 
-    except urllib.error.URLError:
-        print("Couldn't get the VPN servers list.")
+    except:
+        if not thread.stopped():
+            GObject.idle_add(callback, None)
+            print("Couldn't get the VPN servers list.")
 
 
 # See vpngate_gtk_lib.Window.py for more details about how this class works
@@ -190,14 +193,14 @@ class VpngateGtkWindow(Window):
         self.vpntreeview = self.builder.get_object("vpntreeview")
         self.vpnliststore = self.vpntreeview.get_model()
 
-        self.on_updatelistbutton_clicked(self.updatelistbutton)
-
         self.connectbutton.set_sensitive(False)
         self.disconnectbutton.set_sensitive(False)
 
         self.connection = ovpnclient.Connection(
             onstatechange=self.openvpn_statechange_callback,
         )
+
+        GObject.idle_add(self.on_updatelistbutton_clicked, self.updatelistbutton)
 
 
     def set_statusbar(self, text):
@@ -207,10 +210,8 @@ class VpngateGtkWindow(Window):
 
     def on_updatelistbutton_clicked(self, widget):
         widget.set_sensitive(False)
-
-        self.updatelistdialog.show()
-
         self.set_statusbar(_("Loading VPN servers list..."))
+        self.updatelistdialog.present()
 
         self.updatelistthread = StoppableThread(
             target=get_vpngate_list,
@@ -220,24 +221,33 @@ class VpngateGtkWindow(Window):
         self.updatelistthread.start()
 
 
-    def on_cancelupdatelistbutton_clicked(self, widget):
+    def on_cancelreloadbutton_clicked(self, widget):
         if self.updatelistthread.is_alive():
             self.updatelistthread.stop()
 
         self.set_statusbar(_("Loading VPN servers list cancelled"))
         self.updatelistdialog.hide()
-
-
-    def populate_vpngate_list(self, list):
-        vpnliststore = self.vpntreeview.get_model()
-        vpnliststore.clear()
-        [vpnliststore.append(row) for row in list]
         self.updatelistbutton.set_sensitive(True)
-        self.updatelistdialog.hide()
-        self.set_statusbar(
-            _("VPN servers list updated on ") +
-            time.strftime("%a, %d %b %Y %H:%M:%S", time.gmtime())
-        )
+
+    def on_urlerrordialog_response(self, dialog, x):
+        self.updatelistbutton.set_sensitive(True)
+        dialog.hide()
+
+
+    def populate_vpngate_list(self, vpnlist):
+        if vpnlist is not None:
+            vpnliststore = self.vpntreeview.get_model()
+            vpnliststore.clear()
+            [vpnliststore.append(row) for row in vpnlist]
+            self.updatelistbutton.set_sensitive(True)
+            self.updatelistdialog.hide()
+            self.set_statusbar(
+                _("VPN servers list updated on ") +
+                time.strftime("%a, %d %b %Y %H:%M:%S", time.gmtime())
+            )
+        else:
+            self.updatelistdialog.hide()
+            self.builder.get_object("urlerrordialog").present()
 
 
     def on_connectbutton_clicked(self, widget):
@@ -284,18 +294,23 @@ class VpngateGtkWindow(Window):
         labelvpnipaddr = self.builder.get_object("labelvpnipaddr")
         labelvpnconnsince = self.builder.get_object("labelvpnconnsince")
 
-        labelvpnstate.set_text(str_state)
-
-        if state == self.connection.STATE_GOTIPADDR:
-            labelvpnipaddr.set_text(self.connection.get_vpnipaddr())
-        elif state == self.connection.STATE_CONNECTED:
-            labelvpnconnsince.set_text(time.strftime("%a, %d %b %Y %H:%M:%S", time.gmtime()))
+        if state == self.connection.STATE_RECONNECTING:
+            self.connection.close()
+            # ask if they want to reconnect
         else:
-            labelvpnipaddr.set_text('-')
-            labelvpnconnsince.set_text('-')
-            if state == self.connection.STATE_CONNECTING:
-                self.connectbutton.set_sensitive(False)
-                self.disconnectbutton.set_sensitive(True)
-            elif state == self.connection.STATE_DISCONNECTED:
-                self.connectbutton.set_sensitive(True)
-                self.disconnectbutton.set_sensitive(False)
+            labelvpnstate.set_text(str_state)
+
+            if state == self.connection.STATE_GOTIPADDR:
+                labelvpnipaddr.set_text(self.connection.get_vpnipaddr())
+            elif state == self.connection.STATE_CONNECTED:
+                labelvpnconnsince.set_text(time.strftime("%a, %d %b %Y %H:%M:%S", time.gmtime()))
+            else:
+                labelvpnipaddr.set_text('-')
+                labelvpnconnsince.set_text('-')
+                if state == self.connection.STATE_CONNECTING:
+                    self.connectbutton.set_sensitive(False)
+                    self.disconnectbutton.set_sensitive(True)
+                elif state == self.connection.STATE_DISCONNECTED:
+                    model, selected = self.vpntreeview.get_selection().get_selected()
+                    self.connectbutton.set_sensitive(selected is not None)
+                    self.disconnectbutton.set_sensitive(False)
